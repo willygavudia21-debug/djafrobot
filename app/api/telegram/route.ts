@@ -1,123 +1,81 @@
 import { NextRequest, NextResponse } from 'next/server';
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const ADMIN_ID = process.env.ADMIN_ID || ""; // weka ID yako hapa Vercel env
-
-// TEMP DATABASE - baadaye tutaweka DB ya kudumu
-let MOVIES: any[] = [];
-let UPLOAD_MODE: any = {}; // userId -> {files: []}
-let CARTS: any = {};
+let MOVIES: any[] = []; // tutaweka DB baadaye
 
 async function tg(method: string, body: any) {
-  await fetch(`https://api.telegram.org/bot${TOKEN}/${method}`, {
+  return fetch(`https://api.telegram.org/bot${TOKEN}/${method}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   });
 }
 
-async function send(chatId: number, text: string) {
-  await tg('sendMessage', { chat_id: chatId, text, parse_mode: 'HTML' });
-}
-
-async function sendPhoto(chatId: number, photo: string, caption: string) {
-  await tg('sendPhoto', { chat_id: chatId, photo, caption, parse_mode: 'HTML' });
+function mainMenu(balance = 0) {
+  return {
+    inline_keyboard: [
+      [{ text: "🎥 Browse Movies", callback_data: "browse" }, { text: "🔥 Latest 10 Releases", callback_data: "latest" }],
+      [{ text: "🔍 Search Movies", callback_data: "search" }],
+      [{ text: "🎟️ Purchase Unlimited Access Pass", callback_data: "buy_pass" }],
+      [{ text: "💳 Deposit Funds", callback_data: "deposit" }],
+      [{ text: `💰 Balance: KSH ${balance}`, callback_data: "balance" }],
+      [{ text: "💼 My Purchases", callback_data: "purchases" }, { text: "🛒 View Cart", callback_data: "cart" }],
+      [{ text: "🟢 Alerts: ON", callback_data: "alerts" }, { text: "🔄 Reset Account", callback_data: "reset" }],
+      [{ text: "📢 Join Channel", url: "https://t.me/yourchannel" }],
+      [{ text: "👨‍💼 Contact Admin", url: "https://t.me/youradmin" }],
+      [{ text: "🛠️ ADMIN PANEL", callback_data: "admin_panel" }],
+    ]
+  };
 }
 
 export async function POST(req: NextRequest) {
   try {
     const update = await req.json();
+
+    // HANDLE BUTTON CLICKS
+    if (update.callback_query) {
+      const chatId = update.callback_query.message.chat.id;
+      const data = update.callback_query.data;
+
+      if (data === "browse") {
+        await tg('sendMessage', { chat_id: chatId, text: `🎬 <b>Browse Movies (${MOVIES.length})</b>\n\nTuma jina kutafuta.`, parse_mode: 'HTML' });
+      }
+      if (data === "latest") {
+        const latest = MOVIES.slice(0, 10).map(m=>`• ${m.title}`).join('\n') || 'Bado hakuna movies';
+        await tg('sendMessage', { chat_id: chatId, text: `🔥 <b>Latest 10 Releases:</b>\n\n${latest}`, parse_mode: 'HTML' });
+      }
+      if (data === "search") {
+        await tg('sendMessage', { chat_id: chatId, text: `🔍 Tuma jina la movie kutafuta...` });
+      }
+      if (data === "buy_pass") {
+        await tg('sendMessage', { 
+          chat_id: chatId, 
+          text: `🎟️ <b>Unlimited Access Pass Plans:</b>\n\n🔹 PREMIUM HOUR: KSH 10 (2 hours)\n🔹 FREE MOVIE 24HR: KSH 40 (24 hours)\n🔹 Weekly Pass: KSH 99 (7 days)\n🔹 Monthly Pass: KSH 299 (30 days)\n\nBonyeza kulipia:`,
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [[{ text: "Pay KSH 10", callback_data: "pay_10" }, { text: "Pay KSH 40", callback_data: "pay_40" }]] }
+        });
+      }
+      if (data === "admin_panel") {
+        await tg('sendMessage', { 
+          chat_id: chatId, 
+          text: `🛠️ <b>ADMIN PANEL</b>\n\n/upload - Upload movie\n/finish - Maliza`,
+          parse_mode: 'HTML' 
+        });
+      }
+      await tg('answerCallbackQuery', { callback_query_id: update.callback_query.id });
+      return NextResponse.json({ ok: true });
+    }
+
     const msg = update.message;
     if (!msg) return NextResponse.json({ ok: true });
-
     const chatId = msg.chat.id;
     const text = msg.text || '';
-    const isAdmin = String(chatId) === ADMIN_ID || ADMIN_ID === "";
 
-    // HANDLE VIDEO / FILE UPLOAD
-    if (isAdmin && (msg.video || msg.document)) {
-      if (UPLOAD_MODE[chatId]) {
-        const fileId = msg.video?.file_id || msg.document?.file_id;
-        UPLOAD_MODE[chatId].files.push({ file_id: fileId, caption: msg.caption || '' });
-        await send(chatId, `✅ File ${UPLOAD_MODE[chatId].files.length} imehifadhiwa!\nTuma nyingine au andika /finish kumaliza.`);
-        return NextResponse.json({ ok: true });
-      }
-    }
-
-    // COMMANDS
     if (text === '/start') {
-      await send(chatId, `🔥 <b>WILLY DJ AFRO BOT</b> ✅\n\nKaribu! Tuma jina la movie kutafuta.\n\nBonyeza Menu chini kuona commands zote! 👇`);
-      return NextResponse.json({ ok: true });
-    }
-
-    if (text === '/upload' && isAdmin) {
-      UPLOAD_MODE[chatId] = { files: [] };
-      await send(chatId, `🎬 <b>UPLOAD MODE ON</b>\n\nTuma movie files sasa (video/document). Ukimaliza andika /finish`);
-      return NextResponse.json({ ok: true });
-    }
-
-    if (text === '/finish' && isAdmin) {
-      if (!UPLOAD_MODE[chatId] || UPLOAD_MODE[chatId].files.length === 0) {
-        await send(chatId, `❌ Hujatuma file yoyote! Tuma /upload kwanza.`);
-        return NextResponse.json({ ok: true });
-      }
-      await send(chatId, `Sawa, tuma sasa Title ya movie hii:\nMf: Extraction 2 (2023) DJ AFRO`);
-      UPLOAD_MODE[chatId].awaitingTitle = true;
-      return NextResponse.json({ ok: true });
-    }
-
-    // Admin anatuima title baada ya /finish
-    if (isAdmin && UPLOAD_MODE[chatId]?.awaitingTitle && text!== '/finish') {
-      const newMovie = {
-        id: Date.now(),
-        title: text,
-        files: UPLOAD_MODE[chatId].files,
-        uploader: chatId
-      };
-      MOVIES.unshift(newMovie);
-      delete UPLOAD_MODE[chatId];
-      await send(chatId, `✅ <b>${text}</b> imeongezwa na files ${newMovie.files.length}!\nTotal movies: ${MOVIES.length}`);
-      return NextResponse.json({ ok: true });
-    }
-
-    if (text === '/cart') {
-      const cart = CARTS[chatId] || [];
-      if (cart.length === 0) await send(chatId, `🛒 Cart yako iko empty.`);
-      else await send(chatId, `🛒 Cart yako:\n${cart.map((c:any)=>`• ${c.title}`).join('\n')}`);
-      return NextResponse.json({ ok: true });
-    }
-
-    if (text === '/balance') {
-      await send(chatId, `💰 Balance yako: TZS 0\nWasiliana na Admin kuweka pesa.`);
-      return NextResponse.json({ ok: true });
-    }
-
-    if (text.startsWith('/resend') && isAdmin) {
-      const q = text.replace('/resend','').trim().toLowerCase();
-      const m = MOVIES.find(x=>x.title.toLowerCase().includes(q));
-      if (!m) { await send(chatId, `Sijapata movie`); return NextResponse.json({ ok: true }); }
-      for (let f of m.files) {
-        await tg('sendDocument', { chat_id: chatId, document: f.file_id, caption: `🎬 ${m.title}` });
-      }
-      return NextResponse.json({ ok: true });
-    }
-
-    if (text === '/help') {
-      await send(chatId, `🆘 <b>HELP</b>\n\n/start - Anza\n/upload - (Admin) Upload movie\n/finish - Maliza upload\n/resend [jina] - Tuma tena movie\n/cart - Angalia cart\n/balance - Angalia balance`);
-      return NextResponse.json({ ok: true });
-    }
-
-    // SEARCH MOVIE (kwa user wa kawaida)
-    if (!text.startsWith('/')) {
-      const q = text.toLowerCase();
-      const found = MOVIES.filter(m=>m.title.toLowerCase().includes(q));
-      if (found.length === 0) {
-        await send(chatId, `😔 Sijapata "${text}"\nTuna movies ${MOVIES.length}. Jaribu jina lingine.`);
-      } else {
-        for (let movie of found.slice(0,3)) {
-          for (let f of movie.files.slice(0,2)) {
-            await tg('sendDocument', { chat_id: chatId, document: f.file_id, caption: `🎬 <b>${movie.title}</b>\n<i>Powered by DJ AFRO</i>`, parse_mode: 'HTML' });
-          }
-        }
-      }
+      await tg('sendMessage', {
+        chat_id: chatId,
+        text: `🌟 1. <b>How to Buy Movies/Series Directly</b>\n- Browse the catalog and click on any Title.\n- Choose 'Direct M-Pesa' or choose a 🎟️ Subscription Pass to unlock unlimited viewing streams immediately!\n\n🎟️ <b>Unlimited Access Pass Plans Configured:</b>\n• PREMIUM HOUR: KSH 10 (2 hours)\n• FREE MOVIE FOR 24 HR: KSH 40 (24 hours)\n• Weekly Pass: KSH 99 (7 days)\n• Monthly Pass: KSH 299 (30 days)\n\n⚠️ Note: All streams delivered via subscription passes have forwarding disabled.\n\n🎬 Wilmond Ray Bot 🟢 Active\nSelect an option below:`,
+        parse_mode: 'HTML',
+        reply_markup: mainMenu(0)
+      });
       return NextResponse.json({ ok: true });
     }
 
@@ -128,5 +86,5 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET() {
-  return NextResponse.json({ bot: 'DJ AFRO PRO', movies: MOVIES.length });
-  }
+  return NextResponse.json({ bot: 'DJ AFRO - Wilmond Ray Clone', movies: MOVIES.length });
+}
